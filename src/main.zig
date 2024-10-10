@@ -1,5 +1,6 @@
 const std = @import("std");
 const rl = @import("raylib");
+const rg = @import("raygui");
 const m = std.math;
 const RndGen = std.Random.DefaultPrng;
 
@@ -15,6 +16,7 @@ const GRID_SIZE: u32 = 100;
 // Default pixels per grid square
 const GRID_CELL: u32 = 40;
 const GRID_LINE: u32 = 4;
+// Max portion of screen size to show outside of grid on pan
 const CLAMP: f32 = 0.05;
 
 const CellState = enum {
@@ -22,23 +24,45 @@ const CellState = enum {
     will_live,
     will_die,
     dead,
+
     pub fn isAlive(self: CellState) bool {
         switch (self) {
             CellState.live, CellState.will_die => return true,
             else => return false,
         }
     }
+    pub fn flipped(self: CellState) CellState {
+        if (self.isAlive()) return CellState.dead else return CellState.live;
+    }
+};
+
+/// Represents a coordinate in the grid
+const CellPos = struct {
+    x: usize,
+    y: usize,
+
+    pub fn init(x: usize, y: usize) CellPos {
+        return CellPos{
+            .x = x,
+            .y = y,
+        };
+    }
 };
 
 const Grid = struct {
     grid: [GRID_SIZE][GRID_SIZE]CellState,
+    /// Keeps track of active cell during drag drawing
+    last_toggle: CellPos,
 
     pub fn init() Grid {
         return Grid{
             .grid = [_][GRID_SIZE]CellState{[_]CellState{CellState.dead} ** GRID_SIZE} ** GRID_SIZE,
+            // This is a bug, but I cbs making this nullable
+            .last_toggle = CellPos.init(0, 0),
         };
     }
 
+    /// Init to random live cells
     pub fn rand(self: *Grid) !void {
         var rnd = RndGen.init(blk: {
             var seed: u64 = undefined;
@@ -141,11 +165,28 @@ const Grid = struct {
         }
         return count;
     }
+
+    /// Takes in worldspace position
+    pub fn toggle(self: *Grid, pos: Pos, drag: bool) void {
+        const x = pos.x / (GRID_CELL + GRID_LINE);
+        const y = pos.y / (GRID_CELL + GRID_LINE);
+
+        if (x < 0 or x >= GRID_SIZE or y < 0 or y >= GRID_SIZE) {
+            return;
+        }
+        const x_cell: usize = @intFromFloat(x);
+        const y_cell: usize = @intFromFloat(y);
+        if (drag and x_cell == self.last_toggle.x and y_cell == self.last_toggle.y) {
+            return;
+        }
+        self.grid[x_cell][y_cell] = self.grid[x_cell][y_cell].flipped();
+        self.last_toggle = CellPos.init(x_cell, y_cell);
+    }
 };
 
 const FAINT = rl.Color.init(66, 69, 73, 0xFF);
-const BG = rl.Color.init(30, 33, 36, 0xFF);
-const FILL = rl.Color.init(255, 203, 61, 0xFF);
+const BG = rl.Color.init(0x1A, 0x1A, 0x2B, 0xFF);
+const FILL = rl.Color.init(0xFF, 0x63, 0xA2, 0xFF);
 const FILL_DARK = rl.Color.init(247, 177, 64, 0xFF);
 const ERROR = rl.Color.init(181, 53, 108, 0xFF);
 
@@ -154,7 +195,7 @@ pub fn main() anyerror!void {
         .target = p((GRID_CELL + GRID_LINE) * GRID_SIZE / 2, (GRID_CELL + GRID_LINE) * GRID_SIZE / 2),
         .offset = p(screenWidth / 2, screenHeight / 2),
         .rotation = 0,
-        .zoom = 1,
+        .zoom = 0.5,
     };
 
     const grid_size = (GRID_CELL + GRID_LINE) * GRID_SIZE;
@@ -166,12 +207,14 @@ pub fn main() anyerror!void {
     defer rl.closeWindow();
 
     rl.setTargetFPS(60);
+    rg.guiLoadStyle("themes/style_lavanda.rgs");
 
+    var paused = false;
     var step_timer: f32 = 0;
     while (!rl.windowShouldClose()) {
         // Run step every 100ms
         step_timer += rl.getFrameTime();
-        if (step_timer >= 0.1) {
+        if (step_timer >= 0.1 and !paused) {
             grid.step();
             step_timer = 0;
         }
@@ -184,7 +227,16 @@ pub fn main() anyerror!void {
         if (rl.isMouseButtonDown(Mb.mouse_button_left)) {
             cam.target = rl.getScreenToWorld2D(cam.offset.subtract(rl.getMouseDelta()), cam);
             mouse_pos = rl.getMousePosition();
-            // std.debug.print("{}\n", .{cam.target});
+        }
+
+        if (rl.isMouseButtonPressed(Mb.mouse_button_right)) {
+            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), true);
+        } else if (rl.isMouseButtonDown(Mb.mouse_button_right)) {
+            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), true);
+        }
+
+        if (rl.isKeyPressed(rl.KeyboardKey.key_p)) {
+            paused = !paused;
         }
 
         const scroll = rl.getMouseWheelMove();
@@ -196,6 +248,7 @@ pub fn main() anyerror!void {
         }
 
         // Lock camera
+        // TODO: Will break if screen is too wide
         const clamp_dist = CLAMP * (1 / cam.zoom);
         const cam_xmin_limit = -(screenWidth * clamp_dist);
         const cam_xmin_clamp = cam_xmin_limit + (cam.offset.x / cam.zoom);
@@ -208,12 +261,15 @@ pub fn main() anyerror!void {
         const cam_ymax_clamp = cam_ymax_limit - ((screenHeight - cam.offset.y) / cam.zoom);
         cam.target.y = m.clamp(cam.target.y, cam_ymin_clamp, cam_ymax_clamp);
 
+        // Draw worldspace
         {
             cam.begin();
             defer cam.end();
 
             grid.draw();
         }
+
         // rl.drawCircleV(cam.offset, 10, rl.Color.green);
+        if (rg.guiButton(rl.Rectangle.init(25, 25, 50, 50), rg.guiIconText(132, "")) == 1) paused = !paused;
     }
 }
