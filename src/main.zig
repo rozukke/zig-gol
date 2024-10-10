@@ -6,7 +6,6 @@ const RndGen = std.Random.DefaultPrng;
 
 const Pos = rl.Vector2;
 const p = rl.Vector2.init;
-const Mb = rl.MouseButton;
 
 const screenWidth = 1200;
 const screenHeight = 1000;
@@ -27,12 +26,12 @@ const CellState = enum {
 
     pub fn isAlive(self: CellState) bool {
         switch (self) {
-            CellState.live, CellState.will_die => return true,
+            .live, .will_die => return true,
             else => return false,
         }
     }
     pub fn flipped(self: CellState) CellState {
-        if (self.isAlive()) return CellState.dead else return CellState.live;
+        if (self.isAlive()) return .dead else return .live;
     }
 };
 
@@ -52,13 +51,11 @@ const CellPos = struct {
 const Grid = struct {
     grid: [GRID_SIZE][GRID_SIZE]CellState,
     /// Keeps track of active cell during drag drawing
-    last_toggle: CellPos,
+    last_toggle: CellPos = undefined,
 
     pub fn init() Grid {
         return Grid{
-            .grid = [_][GRID_SIZE]CellState{[_]CellState{CellState.dead} ** GRID_SIZE} ** GRID_SIZE,
-            // This is a bug, but I cbs making this nullable
-            .last_toggle = CellPos.init(0, 0),
+            .grid = [_][GRID_SIZE]CellState{[_]CellState{.dead} ** GRID_SIZE} ** GRID_SIZE,
         };
     }
 
@@ -72,8 +69,16 @@ const Grid = struct {
         for (0..self.grid.len) |i| {
             for (0..self.grid[i].len) |j| {
                 if (rnd.random().int(u8) % 5 == 0) {
-                    self.grid[i][j] = CellState.live;
+                    self.grid[i][j] = .live;
                 }
+            }
+        }
+    }
+
+    pub fn clear(self: *Grid) void {
+        for (0..self.grid.len) |i| {
+            for (0..self.grid[i].len) |j| {
+                    self.grid[i][j] = .dead;
             }
         }
     }
@@ -166,8 +171,13 @@ const Grid = struct {
         return count;
     }
 
+    const Drag = enum {
+        press,
+        drag,
+    };
+
     /// Takes in worldspace position
-    pub fn toggle(self: *Grid, pos: Pos, drag: bool) void {
+    pub fn toggle(self: *Grid, pos: Pos, drag: Drag) void {
         const x = pos.x / (GRID_CELL + GRID_LINE);
         const y = pos.y / (GRID_CELL + GRID_LINE);
 
@@ -176,7 +186,7 @@ const Grid = struct {
         }
         const x_cell: usize = @intFromFloat(x);
         const y_cell: usize = @intFromFloat(y);
-        if (drag and x_cell == self.last_toggle.x and y_cell == self.last_toggle.y) {
+        if (drag == .drag and x_cell == self.last_toggle.x and y_cell == self.last_toggle.y) {
             return;
         }
         self.grid[x_cell][y_cell] = self.grid[x_cell][y_cell].flipped();
@@ -200,7 +210,6 @@ pub fn main() anyerror!void {
 
     const grid_size = (GRID_CELL + GRID_LINE) * GRID_SIZE;
     var grid = Grid.init();
-    try grid.rand();
     var mouse_pos = rl.getMousePosition();
 
     rl.initWindow(screenWidth, screenHeight, "Game of Life");
@@ -208,7 +217,10 @@ pub fn main() anyerror!void {
 
     rl.setTargetFPS(60);
     rg.guiLoadStyle("themes/style_lavanda.rgs");
+    rg.guiSetIconScale(2);
 
+    var rand = true;
+    var clear = false;
     var paused = false;
     var step_timer: f32 = 0;
     while (!rl.windowShouldClose()) {
@@ -218,24 +230,33 @@ pub fn main() anyerror!void {
             grid.step();
             step_timer = 0;
         }
-
+        // Randomize if required
+        if (rand) {
+            try grid.rand();
+            rand = false;
+        }
+        // Clear if required
+        if (clear) {
+            grid.clear();
+            clear = false;
+        }
         rl.beginDrawing();
         defer rl.endDrawing();
 
         rl.clearBackground(BG);
 
-        if (rl.isMouseButtonDown(Mb.mouse_button_left)) {
+        if (rl.isMouseButtonDown(.mouse_button_left)) {
             cam.target = rl.getScreenToWorld2D(cam.offset.subtract(rl.getMouseDelta()), cam);
             mouse_pos = rl.getMousePosition();
         }
 
-        if (rl.isMouseButtonPressed(Mb.mouse_button_right)) {
-            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), true);
-        } else if (rl.isMouseButtonDown(Mb.mouse_button_right)) {
-            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), true);
+        if (rl.isMouseButtonPressed(.mouse_button_right)) {
+            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), .press);
+        } else if (rl.isMouseButtonDown(.mouse_button_right)) {
+            grid.toggle(rl.getScreenToWorld2D(rl.getMousePosition(), cam), .drag);
         }
 
-        if (rl.isKeyPressed(rl.KeyboardKey.key_p)) {
+        if (rl.isKeyPressed(.key_p)) {
             paused = !paused;
         }
 
@@ -271,5 +292,7 @@ pub fn main() anyerror!void {
 
         // rl.drawCircleV(cam.offset, 10, rl.Color.green);
         if (rg.guiButton(rl.Rectangle.init(25, 25, 50, 50), rg.guiIconText(132, "")) == 1) paused = !paused;
+        if (rg.guiButton(rl.Rectangle.init(25 + 70, 25, 50, 50), rg.guiIconText(211, "")) == 1) rand = true;
+        if (rg.guiButton(rl.Rectangle.init(25 + 140, 25, 50, 50), rg.guiIconText(9, "")) == 1) clear = true;
     }
 }
